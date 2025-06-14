@@ -10,12 +10,6 @@ const banPath = [
   'favicon.svg',
 ];
 
-function verifyApiKey(request, env) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) return false;
-  return authHeader.substring(7) === env.API_KEY; // 对比密钥
-}
-
 // 数据库初始化
 async function initDatabase() {
   // 创建表
