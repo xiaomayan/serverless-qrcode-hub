@@ -22,3 +22,6 @@ crons = ["*/10 * * * * *"]
 [assets]
 directory = "./dist"
 binding = "ASSETS"
+
+[vars]
+API_KEY = "vM98dRGKgUR0JhRBP3I9X8GrvWttyxHYxJyxv5ze"  # 替换为你的API密钥
