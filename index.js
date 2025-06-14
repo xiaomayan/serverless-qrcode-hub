@@ -357,6 +357,83 @@ export default {
   async fetch(request, env) {
     KV_BINDING = env.KV_BINDING;
     DB = env.DB;
+
+    // 2025-06-14
+    if (path.startsWith('api/v1/')) {
+  // 验证API密钥
+  const apiKey = request.headers.get('X-API-Key');
+  if (!apiKey || apiKey !== env.API_KEY) {
+    return new Response(JSON.stringify({ error: 'Invalid API Key' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // 获取短链列表
+  if (path === 'api/v1/mappings' && request.method === 'GET') {
+    return handleGetMappings(request, url);
+  }
+
+  // 创建短链
+  if (path === 'api/v1/mappings' && request.method === 'POST') {
+    return handleCreateMapping(request);
+  }
+
+  // 获取单个短链
+  if (path.startsWith('api/v1/mappings/') && request.method === 'GET') {
+    const mappingPath = path.split('/')[3];
+    return handleGetMapping(mappingPath);
+  }
+
+  // 更新短链
+  if (path.startsWith('api/v1/mappings/') && request.method === 'PUT') {
+    const mappingPath = path.split('/')[3];
+    return handleUpdateMapping(request, mappingPath);
+  }
+
+  // 删除短链
+  if (path.startsWith('api/v1/mappings/') && request.method === 'DELETE') {
+    const mappingPath = path.split('/')[3];
+    return handleDeleteMapping(mappingPath);
+  }
+
+  return new Response('Not Found', { status: 404 });
+}
+
+// 处理函数示例
+async function handleGetMappings(request, url) {
+  const params = new URLSearchParams(url.search);
+  const page = parseInt(params.get('page')) || 1;
+  const pageSize = parseInt(params.get('pageSize')) || 10;
+
+  try {
+    const result = await listMappings(page, pageSize);
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleCreateMapping(request) {
+  try {
+    const data = await request.json();
+    await createMapping(data.path, data.target, data.name, data.expiry, data.enabled, data.isWechat, data.qrCodeData);
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+    // 2025-06-14
     
     // 初始化数据库
     await initDatabase();
