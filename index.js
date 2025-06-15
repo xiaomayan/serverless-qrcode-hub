@@ -415,6 +415,61 @@ export default {
   return false;
 }
 
+		// 新增/api/qrcode 接口
+	if (path === 'api/qrcode' && request.method === 'GET') {
+  // 认证检查
+  const isAuthenticated = verifyAuthCookie(request, env) || 
+                        (request.headers.get('Authorization')?.startsWith('Bearer ') && 
+                         request.headers.get('Authorization').slice(7) === env.PASSWORD);
+  
+  if (!isAuthenticated) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  const params = new URLSearchParams(url.search);
+  const shortPath = params.get('path');
+  
+  if (!shortPath) {
+    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // 查询数据库（仅获取必要字段）
+  const mapping = await DB.prepare(`
+    SELECT path, name, isWechat
+    FROM mappings
+    WHERE path = ?
+  `).bind(shortPath).first();
+
+  if (!mapping) {
+    return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // 构造短网址（如 https://n.9698.net.cn/test）
+  const shortUrl = `${url.origin}/${mapping.path}`;
+
+  // 返回结果（完全模拟管理后台按钮行为）
+  return new Response(JSON.stringify({
+    success: true,
+    shortUrl: shortUrl,
+    // 动态生成二维码的URL（前端需自行用JS库生成）
+    qrCodeGenerateUrl: shortUrl, // 将此URL传给前端二维码生成器
+    name: mapping.name || '',
+    isWechat: mapping.isWechat === 1 // 标识是否为微信二维码
+  }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+	// 新增/api/qrcode 接口
+
   try {
 
 // 获取短链列表（兼容admin页面）
@@ -435,6 +490,7 @@ if (path === 'api/mappings' && request.method === 'GET') {
     const params = new URLSearchParams(url.search);
     const page = parseInt(params.get('page')) || 1;
     const pageSize = parseInt(params.get('pageSize')) || 10;
+	
 
     try {
         const offset = (page - 1) * pageSize;
@@ -570,60 +626,6 @@ if (path === 'api/mappings' && request.method === 'GET') {
       });
     }
 	
-	// 新增/api/qrcode 接口
-	if (path === 'api/qrcode' && request.method === 'GET') {
-  // 认证检查
-  const isAuthenticated = verifyAuthCookie(request, env) || 
-                        (request.headers.get('Authorization')?.startsWith('Bearer ') && 
-                         request.headers.get('Authorization').slice(7) === env.PASSWORD);
-  
-  if (!isAuthenticated) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  const params = new URLSearchParams(url.search);
-  const shortPath = params.get('path');
-  
-  if (!shortPath) {
-    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // 查询数据库（仅获取必要字段）
-  const mapping = await DB.prepare(`
-    SELECT path, name, isWechat
-    FROM mappings
-    WHERE path = ?
-  `).bind(shortPath).first();
-
-  if (!mapping) {
-    return new Response(JSON.stringify({ error: 'Short URL not found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // 构造短网址（如 https://n.9698.net.cn/test）
-  const shortUrl = `${url.origin}/${mapping.path}`;
-
-  // 返回结果（完全模拟管理后台按钮行为）
-  return new Response(JSON.stringify({
-    success: true,
-    shortUrl: shortUrl,
-    // 动态生成二维码的URL（前端需自行用JS库生成）
-    qrCodeGenerateUrl: shortUrl, // 将此URL传给前端二维码生成器
-    name: mapping.name || '',
-    isWechat: mapping.isWechat === 1 // 标识是否为微信二维码
-  }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
-	// 新增/api/qrcode 接口
 
     // 列出所有短链
     if (path === 'api/shorten/list' && request.method === 'GET') {
