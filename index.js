@@ -422,7 +422,7 @@ if (path === 'api/mappings' && request.method === 'GET') {
   try {
     const params = new URLSearchParams(url.search);
     const page = parseInt(params.get('page')) || 1;
-    const pageSize = Math.min(50, parseInt(params.get('pageSize')) || 10;
+    const pageSize = Math.min(50, parseInt(params.get('pageSize')) || 10);
     const offset = (page - 1) * pageSize;
 
     // 调试日志
