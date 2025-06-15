@@ -420,24 +420,23 @@ export default {
 	  
     // 新增/api/qrcode 接口
 	if (path === 'api/qrcode' && request.method === 'GET') {
-  // 认证检查
+      console.log('进入 /api/qrcode 接口');
+  
+  // 调试输出认证信息
+  const authHeader = request.headers.get('Authorization');
+  console.log('Authorization header:', authHeader);
+  console.log('Env PASSWORD:', env.PASSWORD);
+  
   const isAuthenticated = verifyAuthCookie(request, env) || 
-                        (request.headers.get('Authorization')?.startsWith('Bearer ') && 
-                         request.headers.get('Authorization').slice(7) === env.PASSWORD);
+                        (authHeader?.startsWith('Bearer ') && 
+                         authHeader.slice(7) === env.PASSWORD);
+  
+  console.log('认证结果:', isAuthenticated);
   
   if (!isAuthenticated) {
+    console.log('认证失败');
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
       status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  const params = new URLSearchParams(url.search);
-  const shortPath = params.get('path');
-  
-  if (!shortPath) {
-    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
-      status: 400,
       headers: { 'Content-Type': 'application/json' }
     });
   }
@@ -448,6 +447,8 @@ export default {
     FROM mappings
     WHERE path = ?
   `).bind(shortPath).first();
+  
+  console.log('查询结果:', mapping); // 添加这行调试
 
   if (!mapping) {
     return new Response(JSON.stringify({ error: 'Short URL not found' }), {
