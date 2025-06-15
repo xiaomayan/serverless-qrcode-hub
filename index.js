@@ -569,6 +569,65 @@ if (path === 'api/mappings' && request.method === 'GET') {
         headers: { 'Content-Type': 'application/json' }
       });
     }
+	
+	// 新增/api/qrcode 接口
+	// 新增到 index.js 的 fetch 函数中
+if (path === 'api/qrcode' && request.method === 'GET') {
+  // 认证检查
+  const isAuthenticated = verifyAuthCookie(request, env) || 
+                        (request.headers.get('Authorization')?.startsWith('Bearer ') && 
+                         request.headers.get('Authorization').slice(7) === env.PASSWORD);
+  
+  if (!isAuthenticated) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  const params = new URLSearchParams(url.search);
+  const shortPath = params.get('path');
+  
+  if (!shortPath) {
+    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // 查询数据库
+  const mapping = await DB.prepare(`
+    SELECT path, target, isWechat, qrCodeData
+    FROM mappings
+    WHERE path = ?
+  `).bind(shortPath).first();
+
+  if (!mapping) {
+    return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  // 构造短网址（如 https://n.9698.net.cn/test）
+  const shortUrl = `${url.origin}/${mapping.path}`;
+
+  // 返回结果（与管理后台模态框数据一致）
+  return new Response(JSON.stringify({
+    success: true,
+    shortUrl: shortUrl,
+    qrCodeData: mapping.isWechat ? mapping.qrCodeData : generateQrCodeData(shortUrl) // 如果不是微信二维码，动态生成
+  }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+// 动态生成二维码的辅助函数（需在前端或后端实现，这里用伪代码）
+function generateQrCodeData(url) {
+  // 实际实现可能需要使用二维码生成库（如 qrcode-generator）
+  return `data:image/png;base64,...${url}...`;
+}
+	// 新增/api/qrcode 接口
 
     // 列出所有短链
     if (path === 'api/shorten/list' && request.method === 'GET') {
