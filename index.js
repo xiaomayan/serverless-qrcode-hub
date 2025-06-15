@@ -357,83 +357,6 @@ export default {
   async fetch(request, env) {
     KV_BINDING = env.KV_BINDING;
     DB = env.DB;
-
-    // 2025-06-14
-    if (path.startsWith('api/v1/')) {
-  // 验证API密钥
-  const apiKey = request.headers.get('X-API-Key');
-  if (!apiKey || apiKey !== env.API_KEY) {
-    return new Response(JSON.stringify({ error: 'Invalid API Key' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // 获取短链列表
-  if (path === 'api/v1/mappings' && request.method === 'GET') {
-    return handleGetMappings(request, url);
-  }
-
-  // 创建短链
-  if (path === 'api/v1/mappings' && request.method === 'POST') {
-    return handleCreateMapping(request);
-  }
-
-  // 获取单个短链
-  if (path.startsWith('api/v1/mappings/') && request.method === 'GET') {
-    const mappingPath = path.split('/')[3];
-    return handleGetMapping(mappingPath);
-  }
-
-  // 更新短链
-  if (path.startsWith('api/v1/mappings/') && request.method === 'PUT') {
-    const mappingPath = path.split('/')[3];
-    return handleUpdateMapping(request, mappingPath);
-  }
-
-  // 删除短链
-  if (path.startsWith('api/v1/mappings/') && request.method === 'DELETE') {
-    const mappingPath = path.split('/')[3];
-    return handleDeleteMapping(mappingPath);
-  }
-
-  return new Response('Not Found', { status: 404 });
-}
-
-// 处理函数示例
-async function handleGetMappings(request, url) {
-  const params = new URLSearchParams(url.search);
-  const page = parseInt(params.get('page')) || 1;
-  const pageSize = parseInt(params.get('pageSize')) || 10;
-
-  try {
-    const result = await listMappings(page, pageSize);
-    return new Response(JSON.stringify(result), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
-
-async function handleCreateMapping(request) {
-  try {
-    const data = await request.json();
-    await createMapping(data.path, data.target, data.name, data.expiry, data.enabled, data.isWechat, data.qrCodeData);
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
-    // 2025-06-14
     
     // 初始化数据库
     await initDatabase();
@@ -450,14 +373,21 @@ async function handleCreateMapping(request) {
     if (path.startsWith('api/')) {
       // 登录 API
       if (path === 'api/login' && request.method === 'POST') {
-        const { password } = await request.json();
-        if (password === env.PASSWORD) {
-          return new Response(JSON.stringify({ success: true }), {
-            headers: setAuthCookie(password)
-          });
-        }
-        return new Response('Unauthorized', { status: 401 });
-      }
+  const { password } = await request.json();
+  if (password === env.PASSWORD) {
+    // 返回token和cookie两种认证方式
+    return new Response(JSON.stringify({ 
+      success: true,
+      token: env.PASSWORD // 实际应用中应该生成更安全的token
+    }), {
+      headers: setAuthCookie(password)
+    });
+  }
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
 
       // 登出 API
       if (path === 'api/logout' && request.method === 'POST') {
@@ -466,110 +396,135 @@ async function handleCreateMapping(request) {
         });
       }
 
-      // 需要认证的 API
-      if (!verifyAuthCookie(request, env)) {
-        return new Response('Unauthorized', { status: 401 });
-      }
+      // 2025-06-15
+  // 需要认证的API
+  function verifyAuthCookie(request, env) {
+  // 检查cookie
+  const cookie = request.headers.get('Cookie') || '';
+  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
+  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+    return true;
+  }
+  
+  // 检查Authorization头
+  const authHeader = request.headers.get('Authorization') || '';
+  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
+    return true;
+  }
+  
+  return false;
+}
 
-      try {
-        // 获取即将过期和已过期的映射
-        if (path === 'api/expiring-mappings') {
-          const result = await getExpiringMappings();
-          return new Response(JSON.stringify(result), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
+  try {
+    // 获取短链信息
+    if (path === 'api/shorten' && request.method === 'POST') {
+      const data = await request.json();
+      await createMapping(
+        data.path,
+        data.target,
+        data.name,
+        data.expiry,
+        data.enabled,
+        data.isWechat,
+        data.qrCodeData
+      );
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
-        // 获取映射列表
-        if (path === 'api/mappings') {
-          const params = new URLSearchParams(url.search);
-          const page = parseInt(params.get('page')) || 1;
-          const pageSize = parseInt(params.get('pageSize')) || 10;
-
-          const result = await listMappings(page, pageSize);
-          return new Response(JSON.stringify(result), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 映射管理 API
-        if (path === 'api/mapping') {
-          // 获取单个映射
-          if (request.method === 'GET') {
-            const params = new URLSearchParams(url.search);
-            const mappingPath = params.get('path');
-            if (!mappingPath) {
-              return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' }
-              });
-            }
-
-            const mapping = await DB.prepare(`
-              SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-              FROM mappings
-              WHERE path = ?
-            `).bind(mappingPath).first();
-            if (!mapping) {
-              return new Response(JSON.stringify({ error: 'Mapping not found' }), {
-                status: 404,
-                headers: { 'Content-Type': 'application/json' }
-              });
-            }
-
-            return new Response(JSON.stringify(mapping), {
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-
-          // 创建映射
-          if (request.method === 'POST') {
-            const data = await request.json();
-            await createMapping(data.path, data.target, data.name, data.expiry, data.enabled, data.isWechat, data.qrCodeData);
-            return new Response(JSON.stringify({ success: true }), {
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-
-          // 更新映射
-          if (request.method === 'PUT') {
-            const data = await request.json();
-            await updateMapping(
-              data.originalPath,
-              data.path,
-              data.target,
-              data.name,
-              data.expiry,
-              data.enabled,
-              data.isWechat,
-              data.qrCodeData
-            );
-            return new Response(JSON.stringify({ success: true }), {
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-
-          // 删除映射
-          if (request.method === 'DELETE') {
-            const { path } = await request.json();
-            await deleteMapping(path);
-            return new Response(JSON.stringify({ success: true }), {
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-        }
-
-        return new Response('Not Found', { status: 404 });
-      } catch (error) {
-        console.error('API operation error:', error);
-        return new Response(JSON.stringify({
-          error: error.message || 'Internal Server Error'
-        }), {
-          status: error.message === 'Invalid input' ? 400 : 500,
+    // 获取短链信息
+    if (path === 'api/shorten' && request.method === 'GET') {
+      const params = new URLSearchParams(url.search);
+      const shortPath = params.get('path');
+      
+      if (!shortPath) {
+        return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+          status: 400,
           headers: { 'Content-Type': 'application/json' }
         });
       }
+
+      const mapping = await DB.prepare(`
+        SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+        FROM mappings
+        WHERE path = ?
+      `).bind(shortPath).first();
+
+      if (!mapping) {
+        return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        path: mapping.path,
+        target: mapping.target,
+        name: mapping.name,
+        expiry: mapping.expiry,
+        enabled: mapping.enabled === 1,
+        isWechat: mapping.isWechat === 1,
+        qrCodeData: mapping.qrCodeData
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
+
+    // 删除短链
+    if (path === 'api/shorten' && request.method === 'DELETE') {
+      const { path: shortPath } = await request.json();
+      await deleteMapping(shortPath);
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 更新短链
+    if (path === 'api/shorten' && request.method === 'PUT') {
+      const data = await request.json();
+      await updateMapping(
+        data.originalPath,
+        data.path,
+        data.target,
+        data.name,
+        data.expiry,
+        data.enabled,
+        data.isWechat,
+        data.qrCodeData
+      );
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 列出所有短链
+    if (path === 'api/shorten/list' && request.method === 'GET') {
+      const params = new URLSearchParams(url.search);
+      const page = parseInt(params.get('page')) || 1;
+      const pageSize = parseInt(params.get('pageSize')) || 10;
+
+      const result = await listMappings(page, pageSize);
+      return new Response(JSON.stringify(result), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: 'Not Found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('API error:', error);
+    return new Response(JSON.stringify({
+      error: error.message || 'Internal Server Error'
+    }), {
+      status: error.message === 'Invalid input' ? 400 : 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+    // 2025-06-15
 
     // URL 重定向处理
     if (path) {
