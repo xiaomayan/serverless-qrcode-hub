@@ -2,10 +2,9 @@ name = "duanwangzhi-qrcode-hub"
 main = "index.js"
 compatibility_date = "2025-03-10"
 
-# 合并 build 配置
+# 明确指定模块格式
 [build]
-format = "modules"
-upload = {}
+upload.format = "modules"
 
 [[d1_databases]]
 binding = "DB"
