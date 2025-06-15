@@ -2,10 +2,12 @@ name = "duanwangzhi-qrcode-hub"
 main = "index.js"
 compatibility_date = "2025-03-10"
 
+[build.upload]
+format = "modules"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "duanwanghzi_kv"
-# 注意：将下面的 id 替换为你自己拷贝的 D1 存储的 id 才能正常使用！
 database_id = "d33789fa-3981-4924-bc21-177442a556bb"
 
 [triggers]
@@ -23,6 +25,5 @@ crons = ["*/10 * * * * *"]
 directory = "./dist"
 binding = "ASSETS"
 
-# wrangler.toml (wrangler v3.88.0^)
 [observability.logs]
 enabled = true
