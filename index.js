@@ -571,8 +571,7 @@ if (path === 'api/mappings' && request.method === 'GET') {
     }
 	
 	// 新增/api/qrcode 接口
-	// 新增到 index.js 的 fetch 函数中
-if (path === 'api/qrcode' && request.method === 'GET') {
+	if (path === 'api/qrcode' && request.method === 'GET') {
   // 认证检查
   const isAuthenticated = verifyAuthCookie(request, env) || 
                         (request.headers.get('Authorization')?.startsWith('Bearer ') && 
@@ -595,9 +594,9 @@ if (path === 'api/qrcode' && request.method === 'GET') {
     });
   }
 
-  // 查询数据库
+  // 查询数据库（仅获取必要字段）
   const mapping = await DB.prepare(`
-    SELECT path, target, isWechat, qrCodeData
+    SELECT path, name, isWechat
     FROM mappings
     WHERE path = ?
   `).bind(shortPath).first();
@@ -612,20 +611,17 @@ if (path === 'api/qrcode' && request.method === 'GET') {
   // 构造短网址（如 https://n.9698.net.cn/test）
   const shortUrl = `${url.origin}/${mapping.path}`;
 
-  // 返回结果（与管理后台模态框数据一致）
+  // 返回结果（完全模拟管理后台按钮行为）
   return new Response(JSON.stringify({
     success: true,
     shortUrl: shortUrl,
-    qrCodeData: mapping.isWechat ? mapping.qrCodeData : generateQrCodeData(shortUrl) // 如果不是微信二维码，动态生成
+    // 动态生成二维码的URL（前端需自行用JS库生成）
+    qrCodeGenerateUrl: shortUrl, // 将此URL传给前端二维码生成器
+    name: mapping.name || '',
+    isWechat: mapping.isWechat === 1 // 标识是否为微信二维码
   }), {
     headers: { 'Content-Type': 'application/json' }
   });
-}
-
-// 动态生成二维码的辅助函数（需在前端或后端实现，这里用伪代码）
-function generateQrCodeData(url) {
-  // 实际实现可能需要使用二维码生成库（如 qrcode-generator）
-  return `data:image/png;base64,...${url}...`;
 }
 	// 新增/api/qrcode 接口
 
