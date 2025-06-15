@@ -298,7 +298,6 @@ async function getExpiringMappings() {
   return mappings;
 }
 
-// 添加新的批量清理过期映射的函数
 async function cleanupExpiredMappings(batchSize = 100) {
   const now = new Date().toISOString();
   
@@ -331,7 +330,6 @@ async function cleanupExpiredMappings(batchSize = 100) {
   }
 }
 
-// 数据迁移函数
 async function migrateFromKV() {
   let cursor = null;
   do {
@@ -364,10 +362,12 @@ async function migrateFromKV() {
 
 // 修改后的导出方式
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
+  event.respondWith(handleRequest(event));
 });
 
-async function handleRequest(request) {
+async function handleRequest(event) {
+  const request = event.request;
+  const env = event.env || {}; // 确保 env 有默认值
   KV_BINDING = env.KV_BINDING;
   DB = env.DB;
   
@@ -535,39 +535,28 @@ async function handleRequest(request) {
       status: 404,
       headers: { 'Content-Type': 'application/json' }
     });
-  } catch (error) {
-    console.error('API error:', error);
-    return new Response(JSON.stringify({
-      error: error.message || 'Internal Server Error'
-    }), {
-      status: error.message === 'Invalid input' ? 400 : 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
   }
-}
-    
-    // 2025-06-15
 
-    // URL 重定向处理
-    if (path) {
-      try {
-        const mapping = await DB.prepare(`
-          SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-          FROM mappings
-          WHERE path = ?
-        `).bind(path).first();
-        if (mapping) {
-          // 检查是否启用
-          if (!mapping.enabled) {
-            return new Response('Not Found', { status: 404 });
-          }
+  // URL 重定向处理
+  if (path) {
+    try {
+      const mapping = await DB.prepare(`
+        SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+        FROM mappings
+        WHERE path = ?
+      `).bind(path).first();
+      if (mapping) {
+        // 检查是否启用
+        if (!mapping.enabled) {
+          return new Response('Not Found', { status: 404 });
+        }
 
-          // 检查是否过期 - 使用当天23:59:59作为失效判断时间
-          if (mapping.expiry) {
-            const today = new Date();
-            today.setHours(23, 59, 59, 999);
-            if (new Date(mapping.expiry) < today) {
-              const expiredHtml = `<!DOCTYPE html>
+        // 检查是否过期 - 使用当天23:59:59作为失效判断时间
+        if (mapping.expiry) {
+          const today = new Date();
+          today.setHours(23, 59, 59, 999);
+          if (new Date(mapping.expiry) < today) {
+            const expiredHtml = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -641,19 +630,19 @@ async function handleRequest(request) {
     </div>
 </body>
 </html>`;
-              return new Response(expiredHtml, {
-                status: 404,
-                headers: {
-                  'Content-Type': 'text/html;charset=UTF-8',
-                  'Cache-Control': 'no-store'
-                }
-              });
-            }
+            return new Response(expiredHtml, {
+              status: 404,
+              headers: {
+                'Content-Type': 'text/html;charset=UTF-8',
+                'Cache-Control': 'no-store'
+              }
+            });
           }
+        }
 
-          // 如果是微信二维码，返回活码页面
-          if (mapping.isWechat === 1 && mapping.qrCodeData) {
-            const wechatHtml = `<!DOCTYPE html>
+        // 如果是微信二维码，返回活码页面
+        if (mapping.isWechat === 1 && mapping.qrCodeData) {
+          const wechatHtml = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -745,29 +734,32 @@ async function handleRequest(request) {
     </div>
 </body>
 </html>`;
-            return new Response(wechatHtml, {
-              headers: {
-                'Content-Type': 'text/html;charset=UTF-8',
-                'Cache-Control': 'no-store'
-              }
-            });
-          }
-
-          // 如果不是微信二维码，执行普通重定向
-          return Response.redirect(mapping.target, 302);
+          return new Response(wechatHtml, {
+            headers: {
+              'Content-Type': 'text/html;charset=UTF-8',
+              'Cache-Control': 'no-store'
+            }
+          });
         }
-        return new Response('Not Found', { status: 404 });
-      } catch (error) {
-        console.error('Redirect error:', error);
-        return new Response('Internal Server Error', { status: 500 });
-      }
-    }
 
-  addEventListener('scheduled', event => {
+        // 如果不是微信二维码，执行普通重定向
+        return Response.redirect(mapping.target, 302);
+      }
+      return new Response('Not Found', { status: 404 });
+    } catch (error) {
+      console.error('Redirect error:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+}
+
+// 定时任务处理
+addEventListener('scheduled', event => {
   event.waitUntil(handleScheduled(event));
 });
 
 async function handleScheduled(event) {
+  const env = event.env || {};
   KV_BINDING = env.KV_BINDING;
   DB = env.DB;
   
