@@ -61,11 +61,12 @@ async function initDatabase() {
 
 // Cookie 相关函数
 function verifyAuthCookie(request, env) {
-  const cookie = request.headers.get('Cookie') || '';
-  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-  if (!authToken) return false;
-  return authToken.split('=')[1].trim() === env.PASSWORD;
-}
+    // 检查cookie
+    const cookie = request.headers.get('Cookie') || '';
+    const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
+    if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+        return true;
+    }
 
 function setAuthCookie(password) {
   return {
@@ -407,72 +408,95 @@ export default {
   }
   
   // 检查Authorization头
-  const authHeader = request.headers.get('Authorization') || '';
-  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
-    return true;
-  }
-  
-  return false;
+    const authHeader = request.headers.get('Authorization') || '';
+    if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
+        return true;
+    }
+    
+    return false;
 }
 
   try {
 
 // 获取短链列表（兼容admin页面）
+// 在/api/mappings路由处理前添加认证检查
 if (path === 'api/mappings' && request.method === 'GET') {
-  const params = new URLSearchParams(url.search);
-  const page = parseInt(params.get('page')) || 1;
-  const pageSize = parseInt(params.get('pageSize')) || 10;
+    // 检查认证
+    if (!verifyAuthCookie(request, env)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
 
-  try {
-    const offset = (page - 1) * pageSize;
-    
-    // 查询数据
-    const results = await DB.prepare(`
-      SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-      FROM mappings
-      WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-      ORDER BY created_at DESC
-      LIMIT ? OFFSET ?
-    `).bind(...banPath, pageSize, offset).all();
+    const params = new URLSearchParams(url.search);
+    const page = parseInt(params.get('page')) || 1;
+    const pageSize = parseInt(params.get('pageSize')) || 10;
 
-    // 查询总数
-    const totalResult = await DB.prepare(`
-      SELECT COUNT(*) as total FROM mappings
-      WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-    `).bind(...banPath).first();
+    try {
+        const offset = (page - 1) * pageSize;
+        
+        // 使用单个查询获取分页数据和总数
+        const query = `
+            SELECT 
+                path, target, name, expiry, enabled, isWechat, qrCodeData,
+                (SELECT COUNT(*) FROM mappings WHERE path NOT IN (${banPath.map(() => '?').join(',')})) as total_count
+            FROM mappings
+            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `;
+        
+        // 准备绑定参数：banPath数组两次（用于WHERE和子查询），然后是limit和offset
+        const bindParams = [...banPath, ...banPath, pageSize, offset];
+        
+        const results = await DB.prepare(query).bind(...bindParams).all();
 
-    // 格式化数据
-    const mappings = {};
-    results.results.forEach(row => {
-      mappings[row.path] = {
-        target: row.target,
-        name: row.name,
-        expiry: row.expiry,
-        enabled: row.enabled === 1,
-        isWechat: row.isWechat === 1,
-        qrCodeData: row.qrCodeData
-      };
-    });
+        if (!results.results || results.results.length === 0) {
+            return new Response(JSON.stringify({
+                mappings: {},
+                total: 0,
+                page,
+                pageSize,
+                totalPages: 0
+            }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
 
-    return new Response(JSON.stringify({
-      mappings,
-      total: totalResult.total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(totalResult.total / pageSize)
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+        const total = results.results[0].total_count;
+        const mappings = {};
 
-  } catch (error) {
-    console.error('Failed to list mappings:', error);
-    return new Response(JSON.stringify({
-      error: error.message || 'Failed to load mappings'
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+        for (const row of results.results) {
+            mappings[row.path] = {
+                target: row.target,
+                name: row.name,
+                expiry: row.expiry,
+                enabled: row.enabled === 1,
+                isWechat: row.isWechat === 1,
+                qrCodeData: row.qrCodeData
+            };
+        }
+
+        return new Response(JSON.stringify({
+            mappings,
+            total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize)
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (error) {
+        console.error('Failed to list mappings:', error);
+        return new Response(JSON.stringify({
+            error: error.message || 'Failed to load mappings'
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
 }
     
     // 获取短链信息
