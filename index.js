@@ -61,10 +61,21 @@ async function initDatabase() {
 
 // Cookie 相关函数
 function verifyAuthCookie(request, env) {
+  // 1. 检查 Cookie 认证（管理后台使用）
   const cookie = request.headers.get('Cookie') || '';
   const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-  if (!authToken) return false;
-  return authToken.split('=')[1].trim() === env.PASSWORD;
+  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+    return true;
+  }
+
+  // 2. 检查 Bearer Token 认证（API 客户端使用）
+  const authHeader = request.headers.get('Authorization') || '';
+  if (authHeader.startsWith('Bearer ') && authHeader.slice(7).trim() === env.PASSWORD) {
+    return true;
+  }
+
+  // 3. 如果两种方式都未通过，返回 false
+  return false;
 }
 
 function setAuthCookie(password) {
@@ -419,67 +430,71 @@ export default {
   try {
 	  
     // 新增/api/qrcode 接口
-	if (path === 'api/qrcode' && request.method === 'GET') {
-          try {
-            const params = new URLSearchParams(url.search);
-            const shortPath = params.get('path');
-            console.log(`[QRCode] 请求路径: ${shortPath}`);
+	// 新增/api/qrcode 接口
+if (path === 'api/qrcode' && request.method === 'GET') {
+    try {
+        const params = new URLSearchParams(url.search);
+        const shortPath = params.get('path');
+        console.log(`[QRCode] 请求路径: ${shortPath}`);
 
-            // 认证检查（支持 Cookie 和 Bearer Token）
-            const authHeader = request.headers.get('Authorization');
-            const isAuthenticated = verifyAuthCookie(request, env) || 
-                                 (authHeader?.startsWith('Bearer ') && 
-                                  authHeader.slice(7).trim() === env.PASSWORD);
+        // 认证检查（支持 Cookie 和 Bearer Token）
+        const authHeader = request.headers.get('Authorization');
+        const isAuthenticated = verifyAuthCookie(request, env) || 
+                             (authHeader?.startsWith('Bearer ') && 
+                              authHeader.slice(7).trim() === env.PASSWORD);
 
-            if (!isAuthenticated) {
-              return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        if (!isAuthenticated) {
+            return new Response(JSON.stringify({ error: 'Unauthorized' }), {
                 status: 401,
                 headers: { 'Content-Type': 'application/json' }
-              });
-            }
+            });
+        }
 
-            if (!shortPath) {
-              return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+        if (!shortPath) {
+            return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
                 status: 400,
                 headers: { 'Content-Type': 'application/json' }
-              });
-            }
+            });
+        }
 
-            // 不区分大小写查询
-            const mapping = await DB.prepare(`
-              SELECT path, name, isWechat
-              FROM mappings
-              WHERE LOWER(TRIM(path)) = LOWER(TRIM(?))
-            `).bind(shortPath).first();
+        // 不区分大小写查询
+        const mapping = await DB.prepare(`
+            SELECT path, name, target, isWechat, qrCodeData
+            FROM mappings
+            WHERE LOWER(TRIM(path)) = LOWER(TRIM(?))
+        `).bind(shortPath).first();
 
-            if (!mapping) {
-              return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+        if (!mapping) {
+            return new Response(JSON.stringify({ error: 'Short URL not found' }), {
                 status: 404,
                 headers: { 'Content-Type': 'application/json' }
-              });
-            }
-
-            return new Response(JSON.stringify({
-              success: true,
-              shortUrl: `${url.origin}/${mapping.path}`,
-              qrCodeGenerateUrl: `${url.origin}/${mapping.path}`,
-              name: mapping.name || '',
-              isWechat: mapping.isWechat === 1
-            }), {
-              headers: { 'Content-Type': 'application/json' }
             });
-
-          } catch (error) {
-            console.error('[QRCode] 错误:', error);
-            return new Response(JSON.stringify({ 
-              error: 'Internal Server Error',
-              details: error.message 
-            }), {
-              status: 500,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
         }
+
+        return new Response(JSON.stringify({
+            success: true,
+            shortUrl: `${url.origin}/${mapping.path}`,
+            qrCodeGenerateUrl: `${url.origin}/${mapping.path}`,
+            name: mapping.name || '',
+            isWechat: mapping.isWechat === 1,
+            target: mapping.target,
+            // 只有微信二维码才返回原始二维码数据
+            ...(mapping.isWechat === 1 && mapping.qrCodeData ? { qrCodeData: mapping.qrCodeData } : {})
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (error) {
+        console.error('[QRCode] 错误:', error);
+        return new Response(JSON.stringify({ 
+            error: 'Internal Server Error',
+            details: error.message 
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+}
 	// 新增/api/qrcode 接口
 
 // 获取短链列表（兼容admin页面）
