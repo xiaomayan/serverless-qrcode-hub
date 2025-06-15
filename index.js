@@ -420,69 +420,81 @@ export default {
 	  
     // 新增/api/qrcode 接口
 	if (path === 'api/qrcode' && request.method === 'GET') {
-  console.log('进入 /api/qrcode 接口');
+  try {
+    console.log('进入 /api/qrcode 接口');
+    
+    // 获取查询参数
+    const params = new URLSearchParams(url.search);
+    const shortPath = params.get('path');
+    
+    console.log('请求路径:', shortPath);
+    
+    // 调试输出认证信息
+    const authHeader = request.headers.get('Authorization');
+    console.log('Authorization header:', authHeader);
+    console.log('Env PASSWORD:', env.PASSWORD);
+    
+    const isAuthenticated = verifyAuthCookie(request, env) || 
+                          (authHeader?.startsWith('Bearer ') && 
+                           authHeader.slice(7).trim() === env.PASSWORD);
+    
+    console.log('认证结果:', isAuthenticated);
+    
+    if (!isAuthenticated) {
+      console.log('认证失败');
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
-  // 调试输出认证信息
-  const authHeader = request.headers.get('Authorization');
-  console.log('Authorization header:', authHeader);
-  console.log('Env PASSWORD:', env.PASSWORD);
-  
-  const isAuthenticated = verifyAuthCookie(request, env) || 
-                        (authHeader?.startsWith('Bearer ') && 
-                         authHeader.slice(7).trim() === env.PASSWORD);
-  
-  console.log('认证结果:', isAuthenticated);
-  
-  if (!isAuthenticated) {
-    console.log('认证失败');
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-      status: 401,
+    if (!shortPath) {
+      return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 查询数据库（仅获取必要字段）
+    const mapping = await DB.prepare(`
+      SELECT path, name, isWechat
+      FROM mappings
+      WHERE path = ?
+    `).bind(shortPath).first();
+    
+    console.log('查询结果:', mapping);
+
+    if (!mapping) {
+      return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 构造短网址（如 https://n.9698.net.cn/test）
+    const shortUrl = `${url.origin}/${mapping.path}`;
+
+    // 返回结果
+    return new Response(JSON.stringify({
+      success: true,
+      shortUrl: shortUrl,
+      qrCodeGenerateUrl: shortUrl,
+      name: mapping.name || '',
+      isWechat: mapping.isWechat === 1
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+  } catch (error) {
+    console.error('[/api/qrcode] 错误:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Internal Server Error',
+      details: error.message 
+    }), {
+      status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
   }
-
-  // 从URL查询参数获取path
-  const params = new URLSearchParams(url.search);
-  const shortPath = params.get('path');  // 这是修复的关键行
-  
-  if (!shortPath) {
-    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  console.log('查询的短路径:', shortPath);
-
-  // 查询数据库（仅获取必要字段）
-  const mapping = await DB.prepare(`
-    SELECT path, name, isWechat
-    FROM mappings
-    WHERE path = ?
-  `).bind(shortPath).first();
-  
-  console.log('查询结果:', mapping);
-
-  if (!mapping) {
-    return new Response(JSON.stringify({ error: 'Short URL not found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // 构造短网址（如 https://n.9698.net.cn/test）
-  const shortUrl = `${url.origin}/${mapping.path}`;
-
-  // 返回结果
-  return new Response(JSON.stringify({
-    success: true,
-    shortUrl: shortUrl,
-    qrCodeGenerateUrl: shortUrl,
-    name: mapping.name || '',
-    isWechat: mapping.isWechat === 1
-  }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
 }
 	// 新增/api/qrcode 接口
 
