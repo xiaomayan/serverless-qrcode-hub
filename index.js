@@ -418,61 +418,74 @@ export default {
   try {
 
 // 获取短链列表（兼容admin页面）
+// 修改后的 /api/mappings 处理
 if (path === 'api/mappings' && request.method === 'GET') {
-  const params = new URLSearchParams(url.search);
-  const page = parseInt(params.get('page')) || 1;
-  const pageSize = parseInt(params.get('pageSize')) || 10;
-
-  try {
-    const offset = (page - 1) * pageSize;
+    // 检查认证
+    const isAuthenticated = verifyAuthCookie(request, env) || 
+                          (request.headers.get('Authorization')?.startsWith('Bearer ') && 
+                           request.headers.get('Authorization').slice(7) === env.PASSWORD);
     
-    // 查询数据
-    const results = await DB.prepare(`
-      SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-      FROM mappings
-      WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-      ORDER BY created_at DESC
-      LIMIT ? OFFSET ?
-    `).bind(...banPath, pageSize, offset).all();
+    if (!isAuthenticated) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
 
-    // 查询总数
-    const totalResult = await DB.prepare(`
-      SELECT COUNT(*) as total FROM mappings
-      WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-    `).bind(...banPath).first();
+    const params = new URLSearchParams(url.search);
+    const page = parseInt(params.get('page')) || 1;
+    const pageSize = parseInt(params.get('pageSize')) || 10;
 
-    // 格式化数据
-    const mappings = {};
-    results.results.forEach(row => {
-      mappings[row.path] = {
-        target: row.target,
-        name: row.name,
-        expiry: row.expiry,
-        enabled: row.enabled === 1,
-        isWechat: row.isWechat === 1,
-        qrCodeData: row.qrCodeData
-      };
-    });
+    try {
+        const offset = (page - 1) * pageSize;
+        
+        // 查询数据
+        const results = await DB.prepare(`
+            SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+            FROM mappings
+            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `).bind(...banPath, pageSize, offset).all();
 
-    return new Response(JSON.stringify({
-      mappings,
-      total: totalResult.total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(totalResult.total / pageSize)
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+        // 查询总数
+        const totalResult = await DB.prepare(`
+            SELECT COUNT(*) as total FROM mappings
+            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+        `).bind(...banPath).first();
 
-  } catch (error) {
-    console.error('Failed to list mappings:', error);
-    return new Response(JSON.stringify({
-      error: error.message || 'Failed to load mappings'
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+        // 格式化数据
+        const mappings = {};
+        results.results.forEach(row => {
+            mappings[row.path] = {
+                target: row.target,
+                name: row.name,
+                expiry: row.expiry,
+                enabled: row.enabled === 1,
+                isWechat: row.isWechat === 1,
+                qrCodeData: row.qrCodeData
+            };
+        });
+
+        return new Response(JSON.stringify({
+            mappings,
+            total: totalResult.total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalResult.total / pageSize)
+        }), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (error) {
+        console.error('Failed to list mappings:', error);
+        return new Response(JSON.stringify({
+            error: error.message || 'Failed to load mappings'
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
 }
     
     // 获取短链信息
