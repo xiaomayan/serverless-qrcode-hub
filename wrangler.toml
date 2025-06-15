@@ -2,9 +2,9 @@ name = "duanwangzhi-qrcode-hub"
 main = "index.js"
 compatibility_date = "2025-03-10"
 
-# 明确指定模块格式
+# 关键修改：明确指定模块格式为 ES 模块
 [build]
-upload.format = "modules"
+format = "modules"  # 直接使用 format，无需嵌套 upload
 
 [[d1_databases]]
 binding = "DB"
