@@ -419,14 +419,16 @@ export default {
 
         // 获取短链列表（兼容admin页面）
 if (path === 'api/mappings' && request.method === 'GET') {
-  const params = new URLSearchParams(url.search);
-  const page = parseInt(params.get('page')) || 1;
-  const pageSize = parseInt(params.get('pageSize')) || 10;
-
   try {
+    const params = new URLSearchParams(url.search);
+    const page = parseInt(params.get('page')) || 1;
+    const pageSize = Math.min(50, parseInt(params.get('pageSize')) || 10;
     const offset = (page - 1) * pageSize;
-    
-    // 查询数据
+
+    // 调试日志
+    console.log('Fetching mappings with:', { page, pageSize, offset });
+
+    // 1. 获取数据
     const results = await DB.prepare(`
       SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
       FROM mappings
@@ -435,39 +437,49 @@ if (path === 'api/mappings' && request.method === 'GET') {
       LIMIT ? OFFSET ?
     `).bind(...banPath, pageSize, offset).all();
 
-    // 查询总数
+    console.log('Query results:', results);
+
+    // 2. 获取总数
     const totalResult = await DB.prepare(`
-      SELECT COUNT(*) as total FROM mappings
+      SELECT COUNT(*) as total 
+      FROM mappings 
       WHERE path NOT IN (${banPath.map(() => '?').join(',')})
     `).bind(...banPath).first();
 
-    // 格式化数据
-    const mappings = {};
-    results.results.forEach(row => {
-      mappings[row.path] = {
+    console.log('Total count:', totalResult);
+
+    // 3. 格式化响应
+    const responseData = {
+      success: true,
+      data: results.results.map(row => ({
+        path: row.path,
         target: row.target,
         name: row.name,
         expiry: row.expiry,
         enabled: row.enabled === 1,
         isWechat: row.isWechat === 1,
         qrCodeData: row.qrCodeData
-      };
-    });
+      })),
+      pagination: {
+        page,
+        pageSize,
+        total: totalResult.total,
+        totalPages: Math.ceil(totalResult.total / pageSize)
+      }
+    };
 
-    return new Response(JSON.stringify({
-      mappings,
-      total: totalResult.total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(totalResult.total / pageSize)
-    }), {
+    console.log('Final response:', responseData);
+
+    return new Response(JSON.stringify(responseData), {
       headers: { 'Content-Type': 'application/json' }
     });
 
   } catch (error) {
-    console.error('Failed to list mappings:', error);
+    console.error('API Error:', error);
     return new Response(JSON.stringify({
-      error: error.message || 'Failed to load mappings'
+      success: false,
+      error: error.message,
+      stack: error.stack
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
