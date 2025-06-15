@@ -27,6 +27,3 @@ binding = "ASSETS"
 
 [observability.logs]
 enabled = true
-
-[build.upload]
-format = "modules"
