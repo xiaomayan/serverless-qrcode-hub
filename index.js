@@ -60,21 +60,11 @@ async function initDatabase() {
 }
 
 // Cookie 相关函数
-function verifyAuth(request, env) {
-  // 检查cookie
+function verifyAuthCookie(request, env) {
   const cookie = request.headers.get('Cookie') || '';
   const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
-    return true;
-  }
-  
-  // 检查Authorization头
-  const authHeader = request.headers.get('Authorization') || '';
-  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
-    return true;
-  }
-  
-  return false;
+  if (!authToken) return false;
+  return authToken.split('=')[1].trim() === env.PASSWORD;
 }
 
 function setAuthCookie(password) {
@@ -95,24 +85,23 @@ function clearAuthCookie() {
 async function listMappings(page = 1, pageSize = 10) {
   const offset = (page - 1) * pageSize;
   
-  // 查询数据
+  // 使用单个查询获取分页数据和总数
   const results = await DB.prepare(`
-    SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-    FROM mappings
-    WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+    WITH filtered_mappings AS (
+      SELECT * FROM mappings 
+      WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+    )
+    SELECT 
+      filtered.*,
+      (SELECT COUNT(*) FROM filtered_mappings) as total_count
+    FROM filtered_mappings as filtered
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `).bind(...banPath, pageSize, offset).all();
 
-  // 查询总数
-  const totalResult = await DB.prepare(`
-    SELECT COUNT(*) as total FROM mappings
-    WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-  `).bind(...banPath).first();
-
   if (!results.results || results.results.length === 0) {
     return {
-      items: [],
+      mappings: {},
       total: 0,
       page,
       pageSize,
@@ -120,23 +109,26 @@ async function listMappings(page = 1, pageSize = 10) {
     };
   }
 
-  // 格式化数据
-  const items = results.results.map(row => ({
-    path: row.path,
-    target: row.target,
-    name: row.name,
-    expiry: row.expiry,
-    enabled: row.enabled === 1,
-    isWechat: row.isWechat === 1,
-    qrCodeData: row.qrCodeData
-  }));
+  const total = results.results[0].total_count;
+  const mappings = {};
+
+  for (const row of results.results) {
+    mappings[row.path] = {
+      target: row.target,
+      name: row.name,
+      expiry: row.expiry,
+      enabled: row.enabled === 1,
+      isWechat: row.isWechat === 1,
+      qrCodeData: row.qrCodeData
+    };
+  }
 
   return {
-    items,
-    total: totalResult.total,
+    mappings,
+    total,
     page,
     pageSize,
-    totalPages: Math.ceil(totalResult.total / pageSize)
+    totalPages: Math.ceil(total / pageSize)
   };
 }
 
@@ -236,14 +228,6 @@ async function updateMapping(originalPath, newPath, target, name, expiry, enable
   ).run();
 }
 
-async function getMapping(path) {
-  return await DB.prepare(`
-    SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
-    FROM mappings
-    WHERE path = ?
-  `).bind(path).first();
-}
-
 async function getExpiringMappings() {
   // 获取今天的日期（设置为今天的23:59:59）
   const today = new Date();
@@ -305,6 +289,7 @@ async function getExpiringMappings() {
   return mappings;
 }
 
+// 添加新的批量清理过期映射的函数
 async function cleanupExpiredMappings(batchSize = 100) {
   const now = new Date().toISOString();
   
@@ -337,6 +322,37 @@ async function cleanupExpiredMappings(batchSize = 100) {
   }
 }
 
+// 数据迁移函数
+async function migrateFromKV() {
+  let cursor = null;
+  do {
+    const listResult = await KV_BINDING.list({ cursor, limit: 1000 });
+    
+    for (const key of listResult.keys) {
+      if (!banPath.includes(key.name)) {
+        const value = await KV_BINDING.get(key.name, { type: "json" });
+        if (value) {
+          try {
+            await createMapping(
+              key.name,
+              value.target,
+              value.name,
+              value.expiry,
+              value.enabled,
+              value.isWechat,
+              value.qrCodeData
+            );
+          } catch (e) {
+            console.error(`Failed to migrate ${key.name}:`, e);
+          }
+        }
+      }
+    }
+    
+    cursor = listResult.cursor;
+  } while (cursor);
+}
+
 export default {
   async fetch(request, env) {
     KV_BINDING = env.KV_BINDING;
@@ -355,30 +371,23 @@ export default {
 
     // API 路由处理
     if (path.startsWith('api/')) {
-      // 登录 API - 不需要认证
+      // 登录 API
       if (path === 'api/login' && request.method === 'POST') {
-        const { password } = await request.json();
-        if (password === env.PASSWORD) {
-          return new Response(JSON.stringify({ 
-            success: true,
-            token: env.PASSWORD
-          }), {
-            headers: setAuthCookie(password)
-          });
-        }
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-          status: 401,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      // 需要认证的API
-      if (!verifyAuth(request, env)) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-          status: 401,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+  const { password } = await request.json();
+  if (password === env.PASSWORD) {
+    // 返回token和cookie两种认证方式
+    return new Response(JSON.stringify({ 
+      success: true,
+      token: env.PASSWORD // 实际应用中应该生成更安全的token
+    }), {
+      headers: setAuthCookie(password)
+    });
+  }
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
 
       // 登出 API
       if (path === 'api/logout' && request.method === 'POST') {
@@ -387,123 +396,224 @@ export default {
         });
       }
 
-      try {
-        // 创建短链
-        if (path === 'api/shorten' && request.method === 'POST') {
-          const data = await request.json();
-          await createMapping(
-            data.path,
-            data.target,
-            data.name,
-            data.expiry,
-            data.enabled !== false,
-            data.isWechat || false,
-            data.qrCodeData
-          );
-          return new Response(JSON.stringify({ success: true }), {
+      // 2025-06-15
+  // 需要认证的API
+  function verifyAuthCookie(request, env) {
+  // 检查cookie
+  const cookie = request.headers.get('Cookie') || '';
+  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
+  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+    return true;
+  }
+  
+  // 检查Authorization头
+  const authHeader = request.headers.get('Authorization') || '';
+  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
+    return true;
+  }
+  
+  return false;
+}
+
+  try {
+
+// 获取短链列表（兼容admin页面）
+// 修改后的 /api/mappings 处理
+if (path === 'api/mappings' && request.method === 'GET') {
+    // 检查认证
+    const isAuthenticated = verifyAuthCookie(request, env) || 
+                          (request.headers.get('Authorization')?.startsWith('Bearer ') && 
+                           request.headers.get('Authorization').slice(7) === env.PASSWORD);
+    
+    if (!isAuthenticated) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+            status: 401,
             headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 获取单个短链信息
-        if (path === 'api/shorten' && request.method === 'GET') {
-          const params = new URLSearchParams(url.search);
-          const shortPath = params.get('path');
-          
-          if (!shortPath) {
-            return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
-              status: 400,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-
-          const mapping = await getMapping(shortPath);
-          if (!mapping) {
-            return new Response(JSON.stringify({ error: 'Short URL not found' }), {
-              status: 404,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
-
-          return new Response(JSON.stringify({
-            path: mapping.path,
-            target: mapping.target,
-            name: mapping.name,
-            expiry: mapping.expiry,
-            enabled: mapping.enabled === 1,
-            isWechat: mapping.isWechat === 1,
-            qrCodeData: mapping.qrCodeData
-          }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 删除短链
-        if (path === 'api/shorten' && request.method === 'DELETE') {
-          const { path: shortPath } = await request.json();
-          await deleteMapping(shortPath);
-          return new Response(JSON.stringify({ success: true }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 更新短链
-        if (path === 'api/shorten' && request.method === 'PUT') {
-          const data = await request.json();
-          await updateMapping(
-            data.originalPath,
-            data.path,
-            data.target,
-            data.name,
-            data.expiry,
-            data.enabled !== false,
-            data.isWechat || false,
-            data.qrCodeData
-          );
-          return new Response(JSON.stringify({ success: true }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 获取短链列表
-        if (path === 'api/shorten/list' && request.method === 'GET') {
-          const params = new URLSearchParams(url.search);
-          const page = parseInt(params.get('page')) || 1;
-          const pageSize = parseInt(params.get('pageSize')) || 10;
-
-          const result = await listMappings(page, pageSize);
-          return new Response(JSON.stringify(result), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // 未匹配的API
-        return new Response(JSON.stringify({ error: 'Not Found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
         });
-      } catch (error) {
-        console.error('API error:', error);
+    }
+
+    const params = new URLSearchParams(url.search);
+    const page = parseInt(params.get('page')) || 1;
+    const pageSize = parseInt(params.get('pageSize')) || 10;
+
+    try {
+        const offset = (page - 1) * pageSize;
+        
+        // 查询数据
+        const results = await DB.prepare(`
+            SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+            FROM mappings
+            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `).bind(...banPath, pageSize, offset).all();
+
+        // 查询总数
+        const totalResult = await DB.prepare(`
+            SELECT COUNT(*) as total FROM mappings
+            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
+        `).bind(...banPath).first();
+
+        // 格式化数据
+        const mappings = {};
+        results.results.forEach(row => {
+            mappings[row.path] = {
+                target: row.target,
+                name: row.name,
+                expiry: row.expiry,
+                enabled: row.enabled === 1,
+                isWechat: row.isWechat === 1,
+                qrCodeData: row.qrCodeData
+            };
+        });
+
         return new Response(JSON.stringify({
-          error: error.message || 'Internal Server Error'
+            mappings,
+            total: totalResult.total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalResult.total / pageSize)
         }), {
-          status: error.message === 'Invalid input' ? 400 : 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+    } catch (error) {
+        console.error('Failed to list mappings:', error);
+        return new Response(JSON.stringify({
+            error: error.message || 'Failed to load mappings'
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+}
+    
+    // 获取短链信息
+    if (path === 'api/shorten' && request.method === 'POST') {
+      const data = await request.json();
+      await createMapping(
+        data.path,
+        data.target,
+        data.name,
+        data.expiry,
+        data.enabled,
+        data.isWechat,
+        data.qrCodeData
+      );
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 获取短链信息
+    if (path === 'api/shorten' && request.method === 'GET') {
+      const params = new URLSearchParams(url.search);
+      const shortPath = params.get('path');
+      
+      if (!shortPath) {
+        return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+          status: 400,
           headers: { 'Content-Type': 'application/json' }
         });
       }
+
+      const mapping = await DB.prepare(`
+        SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+        FROM mappings
+        WHERE path = ?
+      `).bind(shortPath).first();
+
+      if (!mapping) {
+        return new Response(JSON.stringify({ error: 'Short URL not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        path: mapping.path,
+        target: mapping.target,
+        name: mapping.name,
+        expiry: mapping.expiry,
+        enabled: mapping.enabled === 1,
+        isWechat: mapping.isWechat === 1,
+        qrCodeData: mapping.qrCodeData
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
+
+    // 删除短链
+    if (path === 'api/shorten' && request.method === 'DELETE') {
+      const { path: shortPath } = await request.json();
+      await deleteMapping(shortPath);
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 更新短链
+    if (path === 'api/shorten' && request.method === 'PUT') {
+      const data = await request.json();
+      await updateMapping(
+        data.originalPath,
+        data.path,
+        data.target,
+        data.name,
+        data.expiry,
+        data.enabled,
+        data.isWechat,
+        data.qrCodeData
+      );
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // 列出所有短链
+    if (path === 'api/shorten/list' && request.method === 'GET') {
+      const params = new URLSearchParams(url.search);
+      const page = parseInt(params.get('page')) || 1;
+      const pageSize = parseInt(params.get('pageSize')) || 10;
+
+      const result = await listMappings(page, pageSize);
+      return new Response(JSON.stringify(result), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: 'Not Found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('API error:', error);
+    return new Response(JSON.stringify({
+      error: error.message || 'Internal Server Error'
+    }), {
+      status: error.message === 'Invalid input' ? 400 : 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+    
+    // 2025-06-15
 
     // URL 重定向处理
     if (path) {
       try {
-        const mapping = await getMapping(path);
+        const mapping = await DB.prepare(`
+          SELECT path, target, name, expiry, enabled, isWechat, qrCodeData
+          FROM mappings
+          WHERE path = ?
+        `).bind(path).first();
         if (mapping) {
           // 检查是否启用
           if (!mapping.enabled) {
             return new Response('Not Found', { status: 404 });
           }
 
-          // 检查是否过期
+          // 检查是否过期 - 使用当天23:59:59作为失效判断时间
           if (mapping.expiry) {
             const today = new Date();
             today.setHours(23, 59, 59, 999);
@@ -515,24 +625,62 @@ export default {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>链接已过期</title>
     <style>
-        :root { color-scheme: light dark; }
+        :root {
+            color-scheme: light dark;
+        }
         body {
-            margin: 0; padding: 16px; min-height: 100vh; display: flex;
+            margin: 0;
+            padding: 16px;
+            min-height: 100vh;
+            display: flex;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f7f7f7; box-sizing: border-box;
+            background: #f7f7f7;
+            box-sizing: border-box;
         }
         .container {
-            margin: auto; padding: 24px 16px; width: calc(100% - 32px);
-            max-width: 320px; text-align: center; background: white;
-            border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            margin: auto;
+            padding: 24px 16px;
+            width: calc(100% - 32px);
+            max-width: 320px;
+            text-align: center;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
-        .title { font-size: 22px; font-weight: 600; margin: 0 0 16px; color: #333; }
-        .info { font-size: 14px; color: #999; margin-top: 20px; }
+        .title {
+            font-size: 22px;
+            font-weight: 600;
+            margin: 0 0 16px;
+            color: #333;
+        }
+        .message {
+            font-size: 16px;
+            color: #666;
+            margin: 16px 0;
+            line-height: 1.5;
+        }
+        .info {
+            font-size: 14px;
+            color: #999;
+            margin-top: 20px;
+        }
         @media (prefers-color-scheme: dark) {
-            body { background: #1a1a1a; }
-            .container { background: #2a2a2a; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
-            .title { color: #e0e0e0; }
-            .info { color: #777; }
+            body {
+                background: #1a1a1a;
+            }
+            .container {
+                background: #2a2a2a;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            }
+            .title {
+                color: #e0e0e0;
+            }
+            .message {
+                color: #aaa;
+            }
+            .info {
+                color: #777;
+            }
         }
     </style>
 </head>
@@ -563,29 +711,78 @@ export default {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${mapping.name || '微信群二维码'}</title>
     <style>
-        :root { color-scheme: light dark; }
+        :root {
+            color-scheme: light dark;
+        }
         body {
-            margin: 0; padding: 16px; min-height: 100vh; display: flex;
+            margin: 0;
+            padding: 16px;
+            min-height: 100vh;
+            display: flex;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f7f7f7; box-sizing: border-box;
+            background: #f7f7f7;
+            box-sizing: border-box;
         }
         .container {
-            margin: auto; padding: 24px 16px; width: calc(100% - 32px);
-            max-width: 320px; text-align: center; background: white;
-            border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            margin: auto;
+            padding: 24px 16px;
+            width: calc(100% - 32px);
+            max-width: 320px;
+            text-align: center;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
-        .wechat-icon { width: 32px; height: 32px; margin-bottom: 12px; }
-        .title { font-size: 22px; font-weight: 600; margin: 0 0 8px; color: #333; }
-        .qr-code { width: 100%; max-width: 240px; border-radius: 8px; margin: 20px 0; }
-        .notice { font-size: 16px; color: #666; margin: 16px 0 0; line-height: 1.5; }
-        .footer { font-size: 14px; color: #999; margin-top: 20px; }
+        .wechat-icon {
+            width: 32px;
+            height: 32px;
+            margin-bottom: 12px;
+        }
+        .title {
+            font-size: 22px;
+            font-weight: 600;
+            margin: 0 0 8px;
+            color: #333;
+        }
+        .qr-code {
+            width: 100%;
+            max-width: 240px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .notice {
+            font-size: 16px;
+            color: #666;
+            margin: 16px 0 0;
+            line-height: 1.5;
+        }
+        .footer {
+            font-size: 14px;
+            color: #999;
+            margin-top: 20px;
+        }
+
         @media (prefers-color-scheme: dark) {
-            body { background: #1a1a1a; }
-            .container { background: #2a2a2a; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
-            .title { color: #e0e0e0; }
-            .notice { color: #aaa; }
-            .footer { color: #777; }
-            .qr-code { background: white; padding: 8px; }
+            body {
+                background: #1a1a1a;
+            }
+            .container {
+                background: #2a2a2a;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            }
+            .title {
+                color: #e0e0e0;
+            }
+            .notice {
+                color: #aaa;
+            }
+            .footer {
+                color: #777;
+            }
+            .qr-code {
+                background: white;
+                padding: 8px;
+            }
         }
     </style>
 </head>
@@ -638,4 +835,5 @@ export default {
       console.log('Expiring soon mappings:', JSON.stringify(result.expiring, null, 2));
     }
   },
+
 };
