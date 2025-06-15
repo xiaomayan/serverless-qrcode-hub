@@ -2,9 +2,9 @@ name = "duanwangzhi-qrcode-hub"
 main = "index.js"
 compatibility_date = "2025-03-10"
 
-# 关键修改：明确指定模块格式为 ES 模块
-[build]
-format = "modules"  # 直接使用 format，无需嵌套 upload
+# 关键修改：移除所有 build 相关配置
+# 因为 Wrangler 4.x 默认使用 ES 模块格式
+# 不再需要显式声明 format
 
 [[d1_databases]]
 binding = "DB"
