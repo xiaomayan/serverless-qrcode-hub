@@ -61,12 +61,20 @@ async function initDatabase() {
 
 // Cookie 相关函数
 function verifyAuthCookie(request, env) {
-    // 检查cookie
-    const cookie = request.headers.get('Cookie') || '';
-    const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-    if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
-        return true;
-    }
+  const cookie = request.headers.get('Cookie') || '';
+  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
+  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+    return true;
+  }
+  
+  // 检查Authorization头
+  const authHeader = request.headers.get('Authorization') || '';
+  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
+    return true;
+  }
+  
+  return false;
+}
 
 function setAuthCookie(password) {
   return {
@@ -354,150 +362,80 @@ async function migrateFromKV() {
   } while (cursor);
 }
 
-export default {
-  async fetch(request, env) {
-    KV_BINDING = env.KV_BINDING;
-    DB = env.DB;
-    
-    // 初始化数据库
-    await initDatabase();
-    
-    const url = new URL(request.url);
-    const path = url.pathname.slice(1);
+// 修改后的导出方式
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
 
-    // 根目录跳转到 管理后台
-    if (path === '') {
-      return Response.redirect(url.origin + '/admin.html', 302);
+async function handleRequest(request) {
+  KV_BINDING = env.KV_BINDING;
+  DB = env.DB;
+  
+  // 初始化数据库
+  await initDatabase();
+  
+  const url = new URL(request.url);
+  const path = url.pathname.slice(1);
+
+  // 根目录跳转到 管理后台
+  if (path === '') {
+    return Response.redirect(url.origin + '/admin.html', 302);
+  }
+
+  // API 路由处理
+  if (path.startsWith('api/')) {
+    // 登录 API
+    if (path === 'api/login' && request.method === 'POST') {
+      const { password } = await request.json();
+      if (password === env.PASSWORD) {
+        return new Response(JSON.stringify({ 
+          success: true,
+          token: env.PASSWORD
+        }), {
+          headers: setAuthCookie(password)
+        });
+      }
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
 
-    // API 路由处理
-    if (path.startsWith('api/')) {
-      // 登录 API
-      if (path === 'api/login' && request.method === 'POST') {
-  const { password } = await request.json();
-  if (password === env.PASSWORD) {
-    // 返回token和cookie两种认证方式
-    return new Response(JSON.stringify({ 
-      success: true,
-      token: env.PASSWORD // 实际应用中应该生成更安全的token
-    }), {
-      headers: setAuthCookie(password)
-    });
-  }
-  return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-    status: 401,
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
+    // 登出 API
+    if (path === 'api/logout' && request.method === 'POST') {
+      return new Response(JSON.stringify({ success: true }), {
+        headers: clearAuthCookie()
+      });
+    }
 
-      // 登出 API
-      if (path === 'api/logout' && request.method === 'POST') {
-        return new Response(JSON.stringify({ success: true }), {
-          headers: clearAuthCookie()
+    // 获取短链列表
+    if (path === 'api/mappings' && request.method === 'GET') {
+      if (!verifyAuthCookie(request, env)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
         });
       }
 
-      // 2025-06-15
-  // 需要认证的API
-  function verifyAuthCookie(request, env) {
-  // 检查cookie
-  const cookie = request.headers.get('Cookie') || '';
-  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
-    return true;
-  }
-  
-  // 检查Authorization头
-    const authHeader = request.headers.get('Authorization') || '';
-    if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
-        return true;
-    }
-    
-    return false;
-}
+      const params = new URLSearchParams(url.search);
+      const page = parseInt(params.get('page')) || 1;
+      const pageSize = parseInt(params.get('pageSize')) || 10;
 
-  try {
-
-// 获取短链列表（兼容admin页面）
-// 在/api/mappings路由处理前添加认证检查
-if (path === 'api/mappings' && request.method === 'GET') {
-    // 检查认证
-    if (!verifyAuthCookie(request, env)) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
+      try {
+        const result = await listMappings(page, pageSize);
+        return new Response(JSON.stringify(result), {
+          headers: { 'Content-Type': 'application/json' }
         });
-    }
-
-    const params = new URLSearchParams(url.search);
-    const page = parseInt(params.get('page')) || 1;
-    const pageSize = parseInt(params.get('pageSize')) || 10;
-
-    try {
-        const offset = (page - 1) * pageSize;
-        
-        // 使用单个查询获取分页数据和总数
-        const query = `
-            SELECT 
-                path, target, name, expiry, enabled, isWechat, qrCodeData,
-                (SELECT COUNT(*) FROM mappings WHERE path NOT IN (${banPath.map(() => '?').join(',')})) as total_count
-            FROM mappings
-            WHERE path NOT IN (${banPath.map(() => '?').join(',')})
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        `;
-        
-        // 准备绑定参数：banPath数组两次（用于WHERE和子查询），然后是limit和offset
-        const bindParams = [...banPath, ...banPath, pageSize, offset];
-        
-        const results = await DB.prepare(query).bind(...bindParams).all();
-
-        if (!results.results || results.results.length === 0) {
-            return new Response(JSON.stringify({
-                mappings: {},
-                total: 0,
-                page,
-                pageSize,
-                totalPages: 0
-            }), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-
-        const total = results.results[0].total_count;
-        const mappings = {};
-
-        for (const row of results.results) {
-            mappings[row.path] = {
-                target: row.target,
-                name: row.name,
-                expiry: row.expiry,
-                enabled: row.enabled === 1,
-                isWechat: row.isWechat === 1,
-                qrCodeData: row.qrCodeData
-            };
-        }
-
-        return new Response(JSON.stringify({
-            mappings,
-            total,
-            page,
-            pageSize,
-            totalPages: Math.ceil(total / pageSize)
-        }), {
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-    } catch (error) {
+      } catch (error) {
         console.error('Failed to list mappings:', error);
         return new Response(JSON.stringify({
-            error: error.message || 'Failed to load mappings'
+          error: error.message || 'Failed to load mappings'
         }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
         });
+      }
     }
-}
     
     // 获取短链信息
     if (path === 'api/shorten' && request.method === 'POST') {
@@ -824,27 +762,28 @@ if (path === 'api/mappings' && request.method === 'GET') {
         return new Response('Internal Server Error', { status: 500 });
       }
     }
-  },
 
-  async scheduled(controller, env, ctx) {
-    KV_BINDING = env.KV_BINDING;
-    DB = env.DB;
-    
-    // 初始化数据库
-    await initDatabase();
-        
-    // 获取过期和即将过期的映射报告
-    const result = await getExpiringMappings();
+  addEventListener('scheduled', event => {
+  event.waitUntil(handleScheduled(event));
+});
 
-    console.log(`Cron job report: Found ${result.expired.length} expired mappings`);
-    if (result.expired.length > 0) {
-      console.log('Expired mappings:', JSON.stringify(result.expired, null, 2));
-    }
+async function handleScheduled(event) {
+  KV_BINDING = env.KV_BINDING;
+  DB = env.DB;
+  
+  // 初始化数据库
+  await initDatabase();
+      
+  // 获取过期和即将过期的映射报告
+  const result = await getExpiringMappings();
 
-    console.log(`Found ${result.expiring.length} mappings expiring in 2 days`);
-    if (result.expiring.length > 0) {
-      console.log('Expiring soon mappings:', JSON.stringify(result.expiring, null, 2));
-    }
-  },
+  console.log(`Cron job report: Found ${result.expired.length} expired mappings`);
+  if (result.expired.length > 0) {
+    console.log('Expired mappings:', JSON.stringify(result.expired, null, 2));
+  }
 
-};
+  console.log(`Found ${result.expiring.length} mappings expiring in 2 days`);
+  if (result.expiring.length > 0) {
+    console.log('Expiring soon mappings:', JSON.stringify(result.expiring, null, 2));
+  }
+}
