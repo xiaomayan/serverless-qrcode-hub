@@ -420,8 +420,8 @@ export default {
 	  
     // 新增/api/qrcode 接口
 	if (path === 'api/qrcode' && request.method === 'GET') {
-      console.log('进入 /api/qrcode 接口');
-  
+  console.log('进入 /api/qrcode 接口');
+
   // 调试输出认证信息
   const authHeader = request.headers.get('Authorization');
   console.log('Authorization header:', authHeader);
@@ -429,7 +429,7 @@ export default {
   
   const isAuthenticated = verifyAuthCookie(request, env) || 
                         (authHeader?.startsWith('Bearer ') && 
-                         authHeader.slice(7) === env.PASSWORD);
+                         authHeader.slice(7).trim() === env.PASSWORD);
   
   console.log('认证结果:', isAuthenticated);
   
@@ -441,6 +441,19 @@ export default {
     });
   }
 
+  // 从URL查询参数获取path
+  const params = new URLSearchParams(url.search);
+  const shortPath = params.get('path');  // 这是修复的关键行
+  
+  if (!shortPath) {
+    return new Response(JSON.stringify({ error: 'Missing path parameter' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  console.log('查询的短路径:', shortPath);
+
   // 查询数据库（仅获取必要字段）
   const mapping = await DB.prepare(`
     SELECT path, name, isWechat
@@ -448,7 +461,7 @@ export default {
     WHERE path = ?
   `).bind(shortPath).first();
   
-  console.log('查询结果:', mapping); // 添加这行调试
+  console.log('查询结果:', mapping);
 
   if (!mapping) {
     return new Response(JSON.stringify({ error: 'Short URL not found' }), {
@@ -460,14 +473,13 @@ export default {
   // 构造短网址（如 https://n.9698.net.cn/test）
   const shortUrl = `${url.origin}/${mapping.path}`;
 
-  // 返回结果（完全模拟管理后台按钮行为）
+  // 返回结果
   return new Response(JSON.stringify({
     success: true,
     shortUrl: shortUrl,
-    // 动态生成二维码的URL（前端需自行用JS库生成）
-    qrCodeGenerateUrl: shortUrl, // 将此URL传给前端二维码生成器
+    qrCodeGenerateUrl: shortUrl,
     name: mapping.name || '',
-    isWechat: mapping.isWechat === 1 // 标识是否为微信二维码
+    isWechat: mapping.isWechat === 1
   }), {
     headers: { 'Content-Type': 'application/json' }
   });
