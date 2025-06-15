@@ -398,24 +398,27 @@ export default {
 
       // 2025-06-15
   // 需要认证的API
-  function verifyAuthCookie(request, env) {
+  //function verifyAuthCookie(request, env) {
   // 检查cookie
-  const cookie = request.headers.get('Cookie') || '';
-  const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
-  if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
-    return true;
-  }
+  //const cookie = request.headers.get('Cookie') || '';
+  //const authToken = cookie.split(';').find(c => c.trim().startsWith('token='));
+  //if (authToken && authToken.split('=')[1].trim() === env.PASSWORD) {
+  //  return true;
+  //}
   
   // 检查Authorization头
-  const authHeader = request.headers.get('Authorization') || '';
-  if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
-    return true;
-  }
+  //const authHeader = request.headers.get('Authorization') || '';
+  //if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === env.PASSWORD) {
+  //  return true;
+  //}
   
-  return false;
-}
+  //return false;
+//}
 
-		// 新增/api/qrcode 接口
+
+  try {
+	  
+    // 新增/api/qrcode 接口
 	if (path === 'api/qrcode' && request.method === 'GET') {
   // 认证检查
   const isAuthenticated = verifyAuthCookie(request, env) || 
@@ -469,8 +472,6 @@ export default {
   });
 }
 	// 新增/api/qrcode 接口
-
-  try {
 
 // 获取短链列表（兼容admin页面）
 // 修改后的 /api/mappings 处理
