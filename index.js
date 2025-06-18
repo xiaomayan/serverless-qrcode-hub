@@ -368,11 +368,36 @@ export default {
   async fetch(request, env) {
     KV_BINDING = env.KV_BINDING;
     DB = env.DB;
+	// 1. 修复请求头问题（新增代码开始）
+    const cleanHeaders = new Headers();
+    const originalHeaders = request.headers;
+    
+    // 复制必要头，避免重复
+    for (const [key, value] of originalHeaders) {
+      if (key.toLowerCase() === 'x-tt-env') {
+        cleanHeaders.set(key, 'prod'); // 强制单值
+      } else if (!['content-type', 'cf-connecting-ip'].includes(key.toLowerCase())) {
+        cleanHeaders.set(key, value);
+      }
+    }
+    
+    // 添加必要认证头
+    if (!cleanHeaders.has('Authorization')) {
+      cleanHeaders.set('Authorization', 'Bearer Gyyhcy1314');
+    }
+    
+    // 构造新请求
+    const newRequest = new Request(request.url, {
+      method: request.method,
+      headers: cleanHeaders,
+      body: request.body
+    });
+    // 修复请求头问题（新增代码结束）
     
     // 初始化数据库
     await initDatabase();
     
-    const url = new URL(request.url);
+    const url = new URL(newRequest.url);
     const path = url.pathname.slice(1);
 
     // 根目录跳转到 管理后台
